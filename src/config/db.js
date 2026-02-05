@@ -3,10 +3,11 @@ require('dotenv').config();
 
 const sequelize = new Sequelize(process.env.DATABASE_URL, {
     dialect: 'postgres',
+    logging: false, 
     dialectOptions: {
         ssl: {
             require: true,
-            rejectUnauthorized: false // Necesario para conectar a Render desde afuera
+            rejectUnauthorized: false 
         }
     }
 });
@@ -15,10 +16,12 @@ const conectarDB = async () => {
     try {
         await sequelize.authenticate();
         
-        // Importamos el modelo aquí para que Sequelize lo registre
+        // Importamos el modelo
         require('../models/User'); 
         
-        await sequelize.sync({ alter: true }); 
+        // Agregamos 'await' para que realmente termine de sincronizar antes de avisar
+        await sequelize.sync(); 
+        
         console.log('✅ Conexión a PostgreSQL y tablas sincronizadas');
     } catch (error) {
         console.error('❌ Error en conexión Postgres:', error);

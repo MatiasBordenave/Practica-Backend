@@ -4,13 +4,22 @@ const { Op } = require('sequelize');
 const jwt = require('jsonwebtoken');
 
 // 1. Mostrar todos los usuarios
+// En tu ruta de obtener usuarios para el Dashboard
 exports.getUsers = async (req, res) => {
-    try {
-        const users = await User.findAll({ attributes: { exclude: ['password'] } });
-        res.json(users);
-    } catch (error) {
-        res.status(500).json({ message: "Error al obtener usuarios" });
-    }
+    const users = await User.findAll();
+    
+    const usersWithActivity = users.map(user => {
+        const userData = user.toJSON();
+        const diasInactivo = (new Date() - new Date(userData.lastLogin)) / (1000 * 60 * 60 * 24);
+        
+        if (diasInactivo > 7 && userData.status === 'active') {
+            userData.status = 'inactive';
+        }
+        
+        return userData;
+    });
+
+    res.json(usersWithActivity);
 };
 
 exports.getUserById = async (req, res) => {
@@ -54,7 +63,8 @@ exports.createUser = async (req, res) => {
 exports.updateUser = async (req, res) => {
     try {
         const { id } = req.params;
-        const { username, email, password, role } = req.body;
+        // Agregamos 'status' a los datos recibidos del body
+        const { username, email, password, role, status } = req.body;
         
         // 1. Buscar al usuario
         const user = await User.findByPk(id);
@@ -65,6 +75,9 @@ exports.updateUser = async (req, res) => {
         if (username) camposAActualizar.username = username;
         if (email) camposAActualizar.email = email;
         if (role) camposAActualizar.role = role;
+        
+        // Manejo del status (active, inactive, deleted)
+        if (status) camposAActualizar.status = status;
 
         // 3. Si mandan password, encriptarlo antes de guardar
         if (password) {
@@ -72,15 +85,21 @@ exports.updateUser = async (req, res) => {
             camposAActualizar.password = await bcrypt.hash(password, salt);
         }
 
-        // 4. Ejecutar la actualización y FORZAR el guardado
+        // 4. Ejecutar la actualización
+        // Con Sequelize, update() actualiza la instancia y guarda en la DB automáticamente
         await user.update(camposAActualizar);
         
-        // Opcional: Puedes usar await user.save() si quieres estar 100% seguro
-        // pero update() debería bastar si los campos coinciden.
-
+        // 5. Respuesta profesional
         res.json({ 
             message: "Usuario actualizado correctamente",
-            datosActualizados: camposAActualizar // Esto te servirá para ver qué se mandó
+            user: {
+                id: user.id,
+                username: user.username,
+                email: user.email,
+                role: user.role,
+                status: user.status,
+                lastLogin: user.lastLogin // Enviamos esto para que el dashboard se refresque bien
+            }
         });
     } catch (error) {
         console.error("Error al editar:", error);
@@ -92,38 +111,49 @@ exports.updateUser = async (req, res) => {
 exports.deleteUser = async (req, res) => {
     try {
         const { id } = req.params;
-        await User.destroy({ where: { id } });
-        res.json({ message: "Usuario eliminado físicamente de la DB" });
+        const user = await User.findByPk(id);
+        
+        if (!user) return res.status(404).json({ message: "Usuario no encontrado" });
+
+        // Borrado lógico: cambiamos el status en lugar de eliminar
+        user.status = 'deleted';
+        await user.save();
+
+        res.json({ message: "Usuario marcado como eliminado con éxito" });
     } catch (error) {
-        res.status(500).json({ message: "Error al borrar" });
+        res.status(500).json({ message: "Error al eliminar" });
     }
 };
 
-
-
 exports.login = async (req, res) => {
     try {
-        // Cambiamos el nombre de la variable de 'username' a 'identifier' 
-        // para que quede más claro que puede ser cualquiera de las dos cosas.
         const { identifier, password } = req.body; 
 
-        // 1. Buscar si existe el usuario por username O por email
+        // 1. Buscamos al usuario (que no esté borrado)
         const user = await User.findOne({ 
             where: {
                 [Op.or]: [
                     { username: identifier },
                     { email: identifier }
-                ]
+                ],
+                // IMPORTANTE: Evitamos que alguien loguee si su estado es 'deleted'
+                status: { [Op.ne]: 'deleted' } 
             } 
         });
         
-        if (!user) return res.status(404).json({ message: "Usuario o Email no encontrado" });
+        if (!user) return res.status(404).json({ message: "Usuario no encontrado o cuenta eliminada" });
 
         // 2. Verificar contraseña
         const isMatch = await bcrypt.compare(password, user.password);
         if (!isMatch) return res.status(401).json({ message: "Contraseña incorrecta" });
 
-        // 3. Crear el Token
+        // 3. ACTUALIZACIÓN: Registro de última conexión y reset de estado
+        // Si el usuario estaba 'inactive', al loguear vuelve a estar 'active'
+        user.lastLogin = new Date();
+        user.status = 'active'; 
+        await user.save();
+
+        // 4. Crear el Token
         const token = jwt.sign(
             { id: user.id, role: user.role }, 
             process.env.JWT_SECRET, 
@@ -135,7 +165,9 @@ exports.login = async (req, res) => {
             user: { 
                 username: user.username, 
                 email: user.email, 
-                role: user.role 
+                role: user.role,
+                status: user.status,
+                lastLogin: user.lastLogin // Lo mandamos para el dashboard
             } 
         });
     } catch (error) {

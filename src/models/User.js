@@ -20,6 +20,15 @@ const User = sequelize.define('User', {
     role: { 
         type: DataTypes.ENUM('superadmin', 'admin', 'usuario'), 
         defaultValue: 'usuario' 
+    },
+    // --- NUEVOS CAMPOS ---
+    status: {
+        type: DataTypes.ENUM('active', 'inactive', 'deleted'),
+        defaultValue: 'active'
+    },
+    lastLogin: {
+        type: DataTypes.DATE,
+        defaultValue: DataTypes.NOW // Se inicializa con la fecha de creación
     }
 }, {
     timestamps: true
