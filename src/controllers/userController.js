@@ -38,24 +38,54 @@ exports.getUserById = async (req, res) => {
 exports.createUser = async (req, res) => {
     try {
         const { username, email, password, role } = req.body;
-        
-        // Verificar si ya existe el username o email
-        const existe = await User.findOne({ where: { username } });
-        if (existe) return res.status(400).json({ message: "El nombre de usuario ya existe" });
+        const creatorRole = req.user.role; // Extraído del token JWT por tu middleware
 
+        // 1. Validaciones de Jerarquía
+        if (creatorRole === 'usuario') {
+            return res.status(403).json({ message: "Los usuarios no tienen permiso para crear cuentas" });
+        }
+
+        if (creatorRole === 'admin' && role !== 'usuario') {
+            return res.status(403).json({ message: "Un Admin solo puede crear usuarios finales" });
+        }
+
+        // Si es Superadmin, puede crear 'admin' o 'usuario' (el flujo sigue)
+
+        // 2. Verificar si ya existe (Email o Username)
+        const existe = await User.findOne({ 
+            where: { 
+                [Op.or]: [{ username }, { email }] 
+            } 
+        });
+        if (existe) return res.status(400).json({ message: "El nombre de usuario o email ya existe" });
+
+        // 3. Encriptación
         const salt = await bcrypt.genSalt(10);
         const hashedPassword = await bcrypt.hash(password, salt);
 
+        // 4. Creación con todos los campos nuevos
         const newUser = await User.create({
             username,
             email,
             password: hashedPassword,
-            role
+            role: role || 'usuario',
+            status: 'active',      
+            lastLogin: new Date() 
         });
 
-        res.status(201).json({ message: "Usuario creado", id: newUser.id });
+        res.status(201).json({ 
+            message: "Usuario creado con éxito", 
+            user: {
+                id: newUser.id,
+                username: newUser.username,
+                role: newUser.role,
+                status: newUser.status
+            } 
+        });
+
     } catch (error) {
-        res.status(400).json({ message: "Error al crear", error: error.message });
+        console.error(error);
+        res.status(500).json({ message: "Error al crear", error: error.message });
     }
 };
 
@@ -63,42 +93,71 @@ exports.createUser = async (req, res) => {
 exports.updateUser = async (req, res) => {
     try {
         const { id } = req.params;
-        // Agregamos 'status' a los datos recibidos del body
         const { username, email, password, role, status } = req.body;
         
-        // 1. Buscar al usuario
-        const user = await User.findByPk(id);
-        if (!user) return res.status(404).json({ message: "No existe el usuario" });
+        // El 'operador' es quien hace la petición (datos del JWT)
+        const operadorRole = req.user.role; 
+        const operadorId = req.user.id;
 
-        // 2. Crear un objeto solo con los campos que vienen en el body
+        // 1. Buscar al usuario que se quiere modificar (el 'objetivo')
+        const userObjetivo = await User.findByPk(id);
+        if (!userObjetivo) return res.status(404).json({ message: "No existe el usuario" });
+
+        // --- INICIO DE RESTRICCIONES DE SEGURIDAD ---
+
+        // A. Un usuario común no puede editar a nadie (excepto quizás a sí mismo, pero aquí bloqueamos todo)
+        if (operadorRole === 'usuario' && operadorId !== parseInt(id)) {
+            return res.status(403).json({ message: "No tienes permisos para editar otros usuarios" });
+        }
+
+        // B. Protección de Superadmin: Nadie toca a un Superadmin excepto otro Superadmin
+        if (userObjetivo.role === 'superadmin' && operadorRole !== 'superadmin') {
+            return res.status(403).json({ message: "Nivel insuficiente para modificar a un Superadmin" });
+        }
+
+        // C. Restricción de Admin: Un Admin solo puede editar 'usuarios' (no a otros Admins ni Superadmins)
+        if (operadorRole === 'admin' && userObjetivo.role !== 'usuario' && operadorId !== parseInt(id)) {
+            return res.status(403).json({ message: "Como Admin, solo puedes editar usuarios finales" });
+        }
+
+        // D. Evitar escalada de poder: Un Admin no puede convertir a alguien en Superadmin
+        if (role === 'superadmin' && operadorRole !== 'superadmin') {
+            return res.status(403).json({ message: "Solo un Superadmin puede asignar ese rango" });
+        }
+
+        // E. Prevención de "Suicidio" de cuenta: No permitir borrado lógico de uno mismo
+        if (operadorId === parseInt(id) && status === 'deleted') {
+            return res.status(400).json({ message: "No puedes eliminar tu propia cuenta desde aquí" });
+        }
+
+        // --- FIN DE RESTRICCIONES ---
+
+        // 2. Preparar campos a actualizar
         let camposAActualizar = {};
         if (username) camposAActualizar.username = username;
         if (email) camposAActualizar.email = email;
         if (role) camposAActualizar.role = role;
-        
-        // Manejo del status (active, inactive, deleted)
         if (status) camposAActualizar.status = status;
 
-        // 3. Si mandan password, encriptarlo antes de guardar
+        // 3. Encriptar password si viene en el body
         if (password) {
             const salt = await bcrypt.genSalt(10);
             camposAActualizar.password = await bcrypt.hash(password, salt);
         }
 
-        // 4. Ejecutar la actualización
-        // Con Sequelize, update() actualiza la instancia y guarda en la DB automáticamente
-        await user.update(camposAActualizar);
+        // 4. Ejecutar actualización
+        await userObjetivo.update(camposAActualizar);
         
-        // 5. Respuesta profesional
+        // 5. Respuesta
         res.json({ 
             message: "Usuario actualizado correctamente",
             user: {
-                id: user.id,
-                username: user.username,
-                email: user.email,
-                role: user.role,
-                status: user.status,
-                lastLogin: user.lastLogin // Enviamos esto para que el dashboard se refresque bien
+                id: userObjetivo.id,
+                username: userObjetivo.username,
+                email: userObjetivo.email,
+                role: userObjetivo.role,
+                status: userObjetivo.status,
+                lastLogin: userObjetivo.lastLogin
             }
         });
     } catch (error) {
