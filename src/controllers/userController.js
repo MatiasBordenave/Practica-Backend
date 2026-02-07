@@ -35,57 +35,55 @@ exports.getUserById = async (req, res) => {
 };
 
 // 2. Agregar un usuario
-exports.createUser = async (req, res) => {
+// REGLA: Esta la usa cualquier persona desde la Web
+exports.register = async (req, res) => {
     try {
-        const { username, email, password, role } = req.body;
-        const creatorRole = req.user.role; // Extraído del token JWT por tu middleware
-
-        // 1. Validaciones de Jerarquía
-        if (creatorRole === 'usuario') {
-            return res.status(403).json({ message: "Los usuarios no tienen permiso para crear cuentas" });
-        }
-
-        if (creatorRole === 'admin' && role !== 'usuario') {
-            return res.status(403).json({ message: "Un Admin solo puede crear usuarios finales" });
-        }
-
-        // Si es Superadmin, puede crear 'admin' o 'usuario' (el flujo sigue)
-
-        // 2. Verificar si ya existe (Email o Username)
-        const existe = await User.findOne({ 
-            where: { 
-                [Op.or]: [{ username }, { email }] 
-            } 
-        });
-        if (existe) return res.status(400).json({ message: "El nombre de usuario o email ya existe" });
-
-        // 3. Encriptación
+        const { username, email, password } = req.body;
+        
+        // Aquí NO pedimos req.user porque es público
+        // Forzamos el rol a 'usuario' por seguridad
         const salt = await bcrypt.genSalt(10);
         const hashedPassword = await bcrypt.hash(password, salt);
 
-        // 4. Creación con todos los campos nuevos
         const newUser = await User.create({
-            username,
-            email,
+            username: username.trim(),
+            email: email.trim(),
             password: hashedPassword,
-            role: role || 'usuario',
-            status: 'active',      
-            lastLogin: new Date() 
+            role: 'usuario', // Siempre usuario
+            status: 'active'
         });
 
-        res.status(201).json({ 
-            message: "Usuario creado con éxito", 
-            user: {
-                id: newUser.id,
-                username: newUser.username,
-                role: newUser.role,
-                status: newUser.status
-            } 
-        });
-
+        res.status(201).json({ message: "¡Registro exitoso!", user: { id: newUser.id, username: newUser.username } });
     } catch (error) {
-        console.error(error);
-        res.status(500).json({ message: "Error al crear", error: error.message });
+        res.status(400).json({ message: "Error al registrarse", error: error.message });
+    }
+};
+
+// REGLA: Esta la usa solo el Admin desde el Dashboard
+exports.createUserAdmin = async (req, res) => {
+    try {
+        const { username, email, password, role } = req.body;
+        const operadorRole = req.user.role; // Viene del verificarToken
+
+        // Validación de seguridad: Solo Admin o Superadmin entran aquí
+        if (operadorRole !== 'admin' && operadorRole !== 'superadmin') {
+            return res.status(403).json({ message: "No tienes permiso para crear usuarios" });
+        }
+
+        const salt = await bcrypt.genSalt(10);
+        const hashedPassword = await bcrypt.hash(password, salt);
+
+        const newUser = await User.create({
+            username: username.trim(),
+            email: email.trim(),
+            password: hashedPassword,
+            role: role || 'usuario', // El admin elige el rol
+            status: 'active'
+        });
+
+        res.status(201).json({ message: "Usuario creado por administrador", user: newUser });
+    } catch (error) {
+        res.status(400).json({ message: "Error en la creación administrativa", error: error.message });
     }
 };
 
