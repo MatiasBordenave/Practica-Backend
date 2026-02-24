@@ -224,7 +224,7 @@ exports.login = async (req, res) => {
                 email: user.email, 
                 role: user.role,
                 status: user.status,
-                lastLogin: user.lastLogin // Lo mandamos para el dashboard
+                lastLogin: user.lastLogin 
             } 
         });
     } catch (error) {
