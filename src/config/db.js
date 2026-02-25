@@ -16,10 +16,8 @@ const conectarDB = async () => {
     try {
         await sequelize.authenticate();
         
-        // Importamos el modelo
         require('../models/User'); 
         
-        // Agregamos 'await' para que realmente termine de sincronizar antes de avisar
         await sequelize.sync(); 
         
         console.log('✅ Conexión a PostgreSQL y tablas sincronizadas');
