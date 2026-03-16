@@ -203,8 +203,6 @@ exports.deleteUser = async (req, res) => {
             return res.status(400).json({ message: "No puedes eliminar tu propia cuenta" });
         }
 
-        // Lógica de jerarquía: solo Superadmin borra a cualquiera, 
-        // y Admin solo borra a usuarios comunes.
         const esSuperadmin = operadorRole === 'superadmin';
         const esAdminBorrandoUsuario = (operadorRole === 'admin' && user.role === 'usuario');
 
