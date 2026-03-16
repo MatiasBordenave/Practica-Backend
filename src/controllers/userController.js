@@ -90,30 +90,41 @@ exports.updateUser = async (req, res) => {
         const userObjetivo = await User.findByPk(id);
         if (!userObjetivo) return res.status(404).json({ message: "No existe el usuario" });
 
+        // --- VALIDACIONES DE AUTORIZACIÓN ---
+
+        // 1. Un 'usuario' solo puede editarse a sí mismo
         if (operadorRole === 'usuario' && operadorId !== parseInt(id)) {
-            return res.status(403).json({ message: "No tienes permisos para editar otros usuarios" });
+            return res.status(403).json({ message: "No puedes editar a otros usuarios" });
         }
 
+        // 2. Un 'admin' no puede tocar a un 'superadmin' (aunque sea él mismo, si fuera el caso)
         if (userObjetivo.role === 'superadmin' && operadorRole !== 'superadmin') {
-            return res.status(403).json({ message: "Nivel insuficiente para modificar a un Superadmin" });
+            return res.status(403).json({ message: "No puedes modificar a un Superadmin" });
         }
 
-        if (operadorRole === 'admin' && userObjetivo.role !== 'usuario' && operadorId !== parseInt(id)) {
-            return res.status(403).json({ message: "Como Admin, solo puedes editar usuarios finales" });
+        // 3. Un 'admin' solo puede editar a 'usuarios' comunes o a sí mismo
+        if (operadorRole === 'admin' && userObjetivo.role === 'admin' && operadorId !== parseInt(id)) {
+            return res.status(403).json({ message: "Un Admin no puede editar a otros Admins" });
         }
 
+        // 4. Protección de Rango: Nadie (excepto superadmin) puede asignar el rol 'superadmin'
         if (role === 'superadmin' && operadorRole !== 'superadmin') {
-            return res.status(403).json({ message: "Solo un Superadmin puede asignar ese rango" });
-        }
-        if (operadorId === parseInt(id) && status === 'deleted') {
-            return res.status(400).json({ message: "No puedes eliminar tu propia cuenta desde aquí" });
+            return res.status(403).json({ message: "No tienes permiso para asignar el rango Superadmin" });
         }
 
+        // 5. Protección de Rango: Un Admin no puede promoverse a sí mismo o a otros a Admin si no lo es (opcional)
+        if (role === 'admin' && operadorRole === 'usuario') {
+            return res.status(403).json({ message: "No puedes cambiar tu propio rol" });
+        }
+
+        // --- CONSTRUCCIÓN DEL OBJETO DE ACTUALIZACIÓN ---
         let camposAActualizar = {};
         if (username) camposAActualizar.username = username;
-        if (email) camposAActualizar.email = email;
+        if (email)    camposAActualizar.email = email;
+        if (status)   camposAActualizar.status = status;
+        
+        // El rol solo se actualiza si el operador tiene permiso (ya validado arriba)
         if (role) camposAActualizar.role = role;
-        if (status) camposAActualizar.status = status;
 
         if (password) {
             const salt = await bcrypt.genSalt(10);
@@ -122,37 +133,13 @@ exports.updateUser = async (req, res) => {
 
         await userObjetivo.update(camposAActualizar);
         
-        // 5. Respuesta
         res.json({ 
             message: "Usuario actualizado correctamente",
-            user: {
-                id: userObjetivo.id,
-                username: userObjetivo.username,
-                email: userObjetivo.email,
-                role: userObjetivo.role,
-                status: userObjetivo.status,
-                lastLogin: userObjetivo.lastLogin
-            }
+            user: { id: userObjetivo.id, username: userObjetivo.username, role: userObjetivo.role }
         });
+
     } catch (error) {
-        console.error("Error al editar:", error);
         res.status(400).json({ message: "Error al actualizar", error: error.message });
-    }
-};
-
-exports.deleteUser = async (req, res) => {
-    try {
-        const { id } = req.params;
-        const user = await User.findByPk(id);
-        
-        if (!user) return res.status(404).json({ message: "Usuario no encontrado" });
-
-        user.status = 'deleted';
-        await user.save();
-
-        res.json({ message: "Usuario marcado como eliminado con éxito" });
-    } catch (error) {
-        res.status(500).json({ message: "Error al eliminar" });
     }
 };
 
@@ -198,5 +185,39 @@ exports.login = async (req, res) => {
     } catch (error) {
         console.error(error);
         res.status(500).json({ message: "Error en el login" });
+    }
+};
+
+
+exports.deleteUser = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const operadorRole = req.user.role;
+        const operadorId = req.user.id;
+
+        const user = await User.findByPk(id);
+        if (!user) return res.status(404).json({ message: "Usuario no encontrado" });
+
+        // Impedir que se borre a sí mismo
+        if (operadorId === parseInt(id)) {
+            return res.status(400).json({ message: "No puedes eliminar tu propia cuenta" });
+        }
+
+        // Lógica de jerarquía: solo Superadmin borra a cualquiera, 
+        // y Admin solo borra a usuarios comunes.
+        const esSuperadmin = operadorRole === 'superadmin';
+        const esAdminBorrandoUsuario = (operadorRole === 'admin' && user.role === 'usuario');
+
+        if (!esSuperadmin && !esAdminBorrandoUsuario) {
+            return res.status(403).json({ message: "No tienes permisos para eliminar este usuario" });
+        }
+
+        user.status = 'deleted';
+        await user.save();
+
+        res.json({ message: "Usuario marcado como eliminado con éxito" });
+    } catch (error) {
+        console.error("Error al borrar:", error);
+        res.status(500).json({ message: "Error al eliminar" });
     }
 };
